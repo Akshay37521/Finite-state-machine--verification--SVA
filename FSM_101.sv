@@ -9,16 +9,16 @@ module FSM_101_sva (input logic clk, input logic rst , input logic in , input lo
   property detect_101;
     @(posedge clk)
     disable iff (rst)
-    (in ##1 !in ##1 in) |-> ##1 out;
+    (in ##1 !in ##1 in) |=> ##1out;
   endproperty
 
-  assert_101: assert property (detect_101);
+   assert property (detect_101);
 
   // No false trigger
   property no_false;
     @(posedge clk)
     disable iff (rst)
-    out |-> ($past(in,1) && $past(!in,2) && $past(in,3));
+    out |-> ($past( in,2) && $past( !in,3) && $past(in,4));
   endproperty
 
   assert_no_false: assert property (no_false);
@@ -40,7 +40,11 @@ module tb;
 
   logic clk;
   FSM_101_bus inf(clk);
-
+  initial begin
+    $dumpfile();
+    $dumpvars();
+  end
+  
   // DUT
   FSM_101 dut (
     .in(inf.in),
