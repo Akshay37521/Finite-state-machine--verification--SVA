@@ -49,6 +49,26 @@ interface FSM_bus(input logic clk);
 
   modport tb (clocking cb, input clk);
   modport mon(clocking cb_mon , input clk);
+    
+    property seq_101;
+    @(posedge clk)
+    disable iff(rst)
+    (din ##1 !din ##1 din) |=> @(posedge clk)dout; 
+  endproperty 
+  assert property(seq_101);
+  property seq_111;
+    @(posedge clk)
+    disable iff(rst)
+    (din ##1 din ##1 din) |=> @(posedge clk) dout;
+  endproperty
+  assert property(seq_111);
+    
+   property no_false_trigger;
+     @(posedge clk)
+     disable iff(rst)
+     dout |=>( ($past(din,1) && $past(!din,2) && $past(din,3) ) || dout|->($past(din,1) && $past(din,2) && $past(din,3)));
+   endproperty
+       assert property(no_false_trigger);
 endinterface
 
     
@@ -57,13 +77,49 @@ module tb;
     bit clk =0;
     always #5 clk = ~clk;
   FSM_bus inf(clk);
-initial begin
-     $dumpfile();
-      $dumpvars();
-     end
   moore_dual_detector dut(.clk(inf.clk),.rst(inf.rst),.din(inf.din),.dout(inf.dout));
+  
+    covergroup FSM_state_cov @(posedge clk);
+    cp_state: coverpoint dut.state {
+      bins s0 = {3'b000};
+      bins s1 = {3'b001};
+      bins s2 = {3'b010};
+      bins s3 = {3'b011};
+      bins s4 = {3'b100};
+      bins s5 = {3'b101};
+    }
+  endgroup
+
+  covergroup FSM_input_cov @(posedge clk);
+    cp_din:  coverpoint inf.din  { bins zero={0}; bins one={1}; }
+    cp_dout: coverpoint inf.dout { bins no_detect={0}; bins detect={1}; }
+  endgroup
+
+  covergroup FSM_seq_cov @(posedge clk);
+    cp_seq: coverpoint dut.state {
+      bins hit_101 = (3'b010 => 3'b011);
+      bins hit_111 = (3'b100 => 3'b101);
+    }
+  endgroup
+  
+  FSM_state_cov sc;
+  FSM_input_cov ic;
+  FSM_seq_cov   qc;
+   initial begin
+    $dumpfile();
+    $dumpvars();
+    sc = new();
+    ic = new();
+    qc = new();
+  end
 
 FSM_tb tb(inf);
+  final begin
+    $display("State   Coverage = %.2f%%", sc.get_coverage());
+    $display("Input   Coverage = %.2f%%", ic.get_coverage());
+    $display("Seq     Coverage = %.2f%%", qc.get_coverage());
+    $display("Overall Coverage = %.2f%%", $get_coverage());
+  end
 endmodule
     
 program FSM_tb(FSM_bus inf);
@@ -79,44 +135,117 @@ endclass
 
 class FSM_gen;
   mailbox #(FSM_trans) mbx;
+  int num_test = 200;
   function new(mailbox #(FSM_trans) mbx);
     this.mbx = mbx;
   endfunction
 
-  task run();
+  task send_rst();
     FSM_trans t;
 
-    // ----------------------------------------
-    // Phase 1: Controlled Reset (not randomized)
-    // ----------------------------------------
+    repeat(2) begin
     t = new();
     t.rst = 1;
     t.din = 0;
     mbx.put(t);
-
-    // Hold reset for 2 cycles
-    t = new();
-    t.rst = 1;
-    t.din = 0;
-    mbx.put(t);
-
-    // De-assert reset
+    end
+    
     t = new();
     t.rst = 0;
     t.din = 0;
     mbx.put(t);
-
-    // ----------------------------------------
-    // Phase 2: Randomize only din
-    // ----------------------------------------
-    repeat(200) begin
+  endtask
+  
+  task send_101();
+    FSM_trans t;
+    bit[2:0] pattern = 3'b101;
+    repeat(3) begin
+      t = new();
+      t.rst = 0;
+      t.din = pattern[2];
+      pattern =pattern<<1;
+      mbx.put(t);
+    end
+  endtask
+  
+  task send_111();
+    FSM_trans t;
+   
+    repeat(3) begin
+      t = new();
+      t.rst = 0;
+      t.din = 1;
+      mbx.put(t);
+    end
+  endtask
+  
+  task send_10111();
+    FSM_trans t;
+    bit[4:0] pattern = 5'b10111;
+    repeat(5) begin
+      t = new();
+      t.rst = 0;
+      t.din = pattern[4];
+      pattern = pattern<<1;
+      mbx.put(t);
+    end
+  endtask
+  
+  task send_11101();
+    FSM_trans t;
+    bit[4:0] pattern = 5'b11101;
+    repeat(5) begin
+      t = new();
+      t.rst = 0;
+      t.din = pattern[4];
+      pattern = pattern<<1;
+      mbx.put(t);
+    end
+  endtask
+  
+  task send_1111111();
+    FSM_trans t;
+    repeat(7) begin
+      t = new();
+      t.rst = 0;
+      t.din = 1;
+      mbx.put(t);
+    end
+  endtask
+  
+  task send_000000();
+    FSM_trans t;
+    repeat(7) begin
+      t = new();
+      t.rst = 0;
+      t.din = 0;
+      mbx.put(t);
+    end
+  endtask
+  
+  task send_random(int count);
+    FSM_trans t;
+    repeat(count) begin
       t = new();
       t.rst = 0;             // rst always 0 during stimulus
       assert(t.randomize()); // only din randomizes
       mbx.put(t);
     end
-
   endtask
+  
+  task run();
+    send_rst();
+    
+    repeat(5) send_101();
+    repeat(5) send_111();
+    repeat(5) send_10111();
+    repeat(5) send_11101();
+    repeat(5) send_1111111();
+    repeat(5) send_000000();
+    send_random(150);
+  endtask
+
+ 
 endclass
       
       class FSM_drive;
@@ -232,7 +361,9 @@ endfunction
 endtask
 
 endclass
-                     
+         
+  
+
 FSM_drive d;
 FSM_gen g;
 FSM_monitor m;
@@ -251,31 +382,12 @@ initial begin
       s.run();
     join_any
 
-    wait(s.pass + s.fail == 200);
-
+  wait(s.pass + s.fail == 303);
+ 
     #10;
     
     $display("  Total = %0d   Pass = %0d   Fail = %0d",
              s.pass + s.fail, s.pass, s.fail);
-    
-
-    
-  end
+ end
 endprogram
-                     
-            
-                
-            
-                            
-                          
-        
-      
-        
-         
-            
-          
-            
-          
-      
-    
-    
+
